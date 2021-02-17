@@ -1,6 +1,8 @@
 import torch
 from torch import nn
 import numpy as np
+from torch.distributions import MultivariateNormal
+import torch.nn.functional as f
 
 class SamplingNetworks(nn.Module):
     """
@@ -17,8 +19,11 @@ class SamplingNetworks(nn.Module):
         self.layer1 = nn.Linear(in_dim, 32)
         self.layer2 = nn.Linear(32, 64)
         self.layer3 = nn.Linear(64, out_dim)
+        # to give all the actions initially the same probability
+        self.variable = torch.full(size=(in_dim,), fill_value=0.5)
+        self.scalar_matrix = torch.diag(self.variable)
 
-    def forward(self, obs):
+    def forward(self, obs, actor = False):
         """
             Feeds the observation to the network
             :param obs: the observation of the enivronment
@@ -28,8 +33,21 @@ class SamplingNetworks(nn.Module):
         if isinstance(obs, np.ndarray):
             obs = torch.tensor(obs, dtype=torch.float)
 
-        act1 = nn.ReLU(self.layer1(obs))
-        act2 = nn.Relu(self.layer2(act1))
-        out = nn.ReLU(self.layer3(act2))
+        act1 = f.relu(self.layer1(obs))
+        act2 = f.relu(self.layer2(act1))
+        out = f.relu(self.layer3(act2))
+
+        # actor network we need the probability of the actions to count the ratio
+        # if case of critic network we can ignore the return probabilties
+        if actor:
+            # see if other distribution work
+            dist = MultivariateNormal(out, self.scalar_matrix)
+            action = dist.sample()
+            return action, dist.log_prob(action)
+
+
 
         return out
+
+# actor = SamplingNetworks(3,4)
+# print(actor.forward(np.array([1,4,5])))
