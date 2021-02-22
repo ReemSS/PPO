@@ -2,11 +2,12 @@ import torch
 from torch import nn
 import numpy as np
 from torch.distributions import MultivariateNormal
-import torch.nn.functional as f
+import torch.nn.functional as F
 
 class SamplingNetworks(nn.Module):
     """
-        Sampling Networks with 3 linear layers
+        Sampling Networks with 3 linear layers using Relu as activation function also credits to
+        https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
     """
     def __init__(self, in_dim, out_dim):
         """
@@ -15,7 +16,7 @@ class SamplingNetworks(nn.Module):
             :param out_dim:
         """
         super(SamplingNetworks, self).__init__()
-
+        # implemented a easy network in order to simply the wokr of the actor and critic networks
         self.layer1 = nn.Linear(in_dim, 32)
         self.layer2 = nn.Linear(32, 64)
         self.layer3 = nn.Linear(64, out_dim)
@@ -31,23 +32,25 @@ class SamplingNetworks(nn.Module):
             critic network is, or
         """
         if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float)
+            obs = torch.FloatTensor(obs)
 
-        act1 = f.relu(self.layer1(obs))
-        act2 = f.relu(self.layer2(act1))
-        out = f.relu(self.layer3(act2))
+        act1 = F.relu(self.layer1(obs))
+        act2 = F.relu(self.layer2(act1))
+        out = F.relu(self.layer3(act2))
 
         # actor network we need the probability of the actions to count the ratio
         # if case of critic network we can ignore the return probabilties
         if actor:
-            # see if other distribution work
+            # initially give all actions the same probability to allow the actor to explore, credits to
+            # https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
             dist = MultivariateNormal(out, self.scalar_matrix)
             action = dist.sample()
-            return action, dist.log_prob(action)
+            # detach the computation graph?
+            return action.detach().numpy(), dist.log_prob(action)
 
 
 
         return out
 
-# actor = SamplingNetworks(3,4)
-# print(actor.forward(np.array([1,4,5])))
+actor = SamplingNetworks(3,4)
+print(actor.forward(np.array([1,4,5])))
