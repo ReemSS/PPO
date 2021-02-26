@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import numpy as np
-from torch.distributions import MultivariateNormal
+from torch.distributions import MultivariateNormal, Categorical
 import torch.nn.functional as F
 
 class SamplingNetworks(nn.Module):
@@ -17,14 +17,14 @@ class SamplingNetworks(nn.Module):
         """
         super(SamplingNetworks, self).__init__()
         # implemented a easy network in order to simply the wokr of the actor and critic networks
-        self.layer1 = nn.Linear(in_dim, 32)
-        self.layer2 = nn.Linear(32, 64)
+        self.layer1 = nn.Linear(in_dim, 64)
+        self.layer2 = nn.Linear(64, 64)
         self.layer3 = nn.Linear(64, out_dim)
-        # to give all the actions initially the same probability
-        self.variable = torch.full(size=(in_dim,), fill_value=0.5)
+        # to give all the actions initially the same probability, needed for continuous action spaces
+        self.variable = torch.full(size=(out_dim,), fill_value=0.5)
         self.scalar_matrix = torch.diag(self.variable)
 
-    def forward(self, obs, actor = False):
+    def forward(self, obs):
         """
             Feeds the observation to the network
             :param obs: the observation of the enivronment
@@ -32,25 +32,36 @@ class SamplingNetworks(nn.Module):
             critic network is, or
         """
         if isinstance(obs, np.ndarray):
-            obs = torch.FloatTensor(obs)
+            obs = torch.tensor(obs, dtype=torch.float)
 
         act1 = F.relu(self.layer1(obs))
         act2 = F.relu(self.layer2(act1))
-        out = F.relu(self.layer3(act2))
-
-        # actor network we need the probability of the actions to count the ratio
-        # if case of critic network we can ignore the return probabilties
-        if actor:
-            # initially give all actions the same probability to allow the actor to explore, credits to
-            # https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
-            dist = MultivariateNormal(out, self.scalar_matrix)
-            action = dist.sample()
-            # detach the computation graph?
-            return action.detach().numpy(), dist.log_prob(action)
-
-
+        out = self.layer3(act2)
 
         return out
 
-actor = SamplingNetworks(3,4)
-print(actor.forward(np.array([1,4,5])))
+    def random_action(self, obs,env_continuous, critic = False):
+        # actor network we need the probability of the actions to count the ratio
+        # if case of critic network we can ignore the return probabilties
+
+        # initially give all actions the same probability to allow the actor to explore, credits to
+        # https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
+        if isinstance(obs, np.ndarray):
+            obs = torch.tensor(obs, dtype=torch.float)
+
+        mean = self.forward(obs)
+
+        if critic:
+            mean = self.forward(obs).squeeze()
+        if env_continuous:
+            dist = MultivariateNormal(mean, self.scalar_matrix)
+            action = dist.sample()
+            entropy = dist.entropy()
+
+        else:
+            dist = Categorical(mean)
+            print(mean)
+            action = dist.sample()
+            entropy = dist.entropy()
+
+        return action.detach().numpy(), dist.log_prob(action), entropy
