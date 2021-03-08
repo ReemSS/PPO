@@ -1,8 +1,8 @@
-from MyPPO.spinningup.spinup.user_config import DEFAULT_DATA_DIR, FORCE_DATESTAMP, \
+from spinningup.spinup.user_config import DEFAULT_DATA_DIR, FORCE_DATESTAMP, \
                                DEFAULT_SHORTHAND, WAIT_BEFORE_LAUNCH
-from MyPPO.spinningup.spinup.utils.logx import colorize
-from MyPPO.spinningup.spinup.utils.mpi_tools import mpi_fork
-from MyPPO.spinningup.spinup.utils.serialization_utils import convert_json
+from spinningup.spinup.utils.logx import colorize
+from spinningup.spinup.utils.mpi_tools import mpi_fork
+from spinningup.spinup.utils.serialization_utils import convert_json
 import base64
 import cloudpickle
 import json
