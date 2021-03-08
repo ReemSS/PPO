@@ -7,8 +7,8 @@ import gym
 import time
 import torch
 import wandb
-from MyPPO.spinningup.spinup.utils import EpochLogger
-from MyPPO.spinningup.spinup.utils import colorize
+from spinningup.spinup.utils import EpochLogger
+from spinningup.spinup.utils import colorize
 class PPO():
     """
         Implementation of the PPO algorithm with clipped surrogate objective.
