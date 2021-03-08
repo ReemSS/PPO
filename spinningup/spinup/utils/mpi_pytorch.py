@@ -1,5 +1,5 @@
 import torch
-from MyPPO.spinningup.spinup.utils.mpi_tools import broadcast, mpi_avg, num_procs
+from spinningup.spinup.utils.mpi_tools import broadcast, mpi_avg, num_procs
 
 
 def setup_pytorch_for_mpi():
