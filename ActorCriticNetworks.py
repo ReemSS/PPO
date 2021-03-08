@@ -16,7 +16,8 @@ class SamplingNetworks(nn.Module):
             :param out_dim:
         """
         super(SamplingNetworks, self).__init__()
-        # implemented a easy network in order to simply the wokr of the actor and critic networks
+        # implemented an easy network in order to simplify the work of the actor and critic networks
+        # What kind of input ? Box and Discrete
         self.layer1 = nn.Linear(in_dim, 64)
         self.layer2 = nn.Linear(64, 64)
         self.layer3 = nn.Linear(64, out_dim)
@@ -36,7 +37,9 @@ class SamplingNetworks(nn.Module):
 
         act1 = F.relu(self.layer1(obs))
         act2 = F.relu(self.layer2(act1))
-        out = self.layer3(act2)
+        # to sum the output probabilities to 1. Softmax is used here since it helps propagating muticlass information
+        # For
+        out = F.softmax(self.layer3(act2))
 
         return out
 
@@ -60,7 +63,6 @@ class SamplingNetworks(nn.Module):
 
         else:
             dist = Categorical(mean)
-            print(mean)
             action = dist.sample()
             entropy = dist.entropy()
 
