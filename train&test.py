@@ -1,9 +1,9 @@
 import gym
 #from baselines.ppo1 import pposgd_simple as ppo_baseline
 from spinningup.spinup.algos.pytorch.ppo import ppo
-import MyPPO.spinningup.spinup.algos.pytorch.ppo.core as core
-from MyPPO.spinningup.spinup.utils.run_utils import setup_logger_kwargs
-from MyPPO.spinningup.spinup.utils.logx import colorize
+import spinningup.spinup.algos.pytorch.ppo.core as core
+from spinningup.spinup.utils.run_utils import setup_logger_kwargs
+from spinningup.spinup.utils.logx import colorize
 
 def train(env):
 
