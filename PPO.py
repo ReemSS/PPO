@@ -8,6 +8,7 @@ import gym
 import time
 import torch
 from MyPPO.spinningup.spinup.utils.logx import EpochLogger
+from MyPPO.spinningup.spinup.algos.pytorch.ppo.core import MLPActorCritic
 from MyPPO.spinningup.spinup.utils.logx import colorize
 
 
@@ -37,14 +38,18 @@ class PPO():
         self.max_epi_len = max_ep_len
 
         # actor and critic networks to help the agent to act and learn
-        self.actor = SamplingNetworks(self.observations_dim, self.actions_dim)
-        self.critic = SamplingNetworks(self.observations_dim, 1)
+        # self.actor = SamplingNetworks(self.observations_dim, self.actions_dim)
+        # self.critic = SamplingNetworks(self.observations_dim, 1)
+
+        self.ac= MLPActorCritic(env.observation_space, env.action_space)
 
         self.init_hyperparameter()
 
         # in the original implementation of PPO by OpenAI, different values of lr were used for each network
-        self.actor_optimiser = Adam(self.actor.parameters(), lr=self.lr)
-        self.critic_optimiser = Adam(self.critic.parameters(), lr=self.lr)
+        # self.actor_optimiser = Adam(self.actor.parameters(), lr=self.lr)
+        # self.critic_optimiser = Adam(self.critic.parameters(), lr=self.lr)
+        self.actor_optimiser = Adam(self.ac.pi.parameters(), lr=self.lr)
+        self.critic_optimiser = Adam(self.ac.v.parameters(), lr=self.lr)
 
         self.timesteps = 0
         self.env_continuous = (type(env.action_space) == gym.spaces.Box)
@@ -108,15 +113,17 @@ class PPO():
         # gradient policy, we need more than one epoch to pass through the network.
         # The required number of epochs depends on how diverse the dataset is.
         while k < timesteps:
+            final_state_reached = False
             # save the information inside of a rollout
             rollout_t = Rollout(self.batch_size)
 
             batch_rewards = []
             for t in range(self.batch_size):
-                action, logprob,_ = self.actor.random_action(obs, self.env_continuous)
-                value = self.critic(obs)
-                self.logger.store(Value = value.detach().numpy())
-
+                # action, logprob,_ = self.actor.random_action(obs, self.env_continuous)
+                # value = self.critic(obs)
+                action,value, logprob = self.ac.step(torch.as_tensor(obs, dtype=torch.float32))
+                #self.logger.store(Value = value.detach().numpy())
+                self.logger.store(Value = value)
                 # Save the data of the episode
                 rollout_t.add(action, obs, value, logprob)
                 # Apply the action on the environment
@@ -142,12 +149,15 @@ class PPO():
                                        "been reached, but a terminal state has not been reached",
                                        color='yellow',bold=True))
                         # then take a look at the target value
-                        action, _, logprob = self.actor.random_action(obs, self.env_continuous)
+                        # action, _, logprob = self.actor.random_action(obs, self.env_continuous)
+                        #action, _, logprob = self.ac(obs)
+                        action, _, logprob = self.ac.step(torch.as_tensor(obs, dtype=torch.float32))
                         _, r_t, _,info = self.env.step(action)
                         episode_return += r_t
                     elif done:
                         # the terminal state has been reached
                         r_t = 0
+                        final_state_reached = True
                         # Save the episode data
                         self.logger.store(EpisodeReturn = episode_return, EpisodeLength = episode_length)
                     episode_return_arr.append(r_t)
@@ -184,12 +194,12 @@ class PPO():
 
             self.logger.store(Delta_Loss_Actor= curr_policy_loss - old_policy_loss,
                               Delta_Loss_Critic= curr_value_loss - old_value_loss)
-            self.logger_print(k, start_time)
+            self.logger_print(k, start_time, final_state_reached)
 
             # Save the model every 20 iteration, to continue with a trained model
-            if (k % 20 == 0) or (k == k-1):
-                torch.save(self.actor.state_dict(), 'MyPPO/PPO/PPO_author.pth')
-                torch.save(self.critic.state_dict(), 'MyPPO/PPO/critic_author.pth')
+            # if (k % 20 == 0) or (k == k-1):
+            #     torch.save(self.actor.state_dict(), './PPO_author.pth')
+            #     torch.save(self.critic.state_dict(), './critic_author.pth')
 
             for i in info:
                 if 'episode' in i:
@@ -245,7 +255,8 @@ class PPO():
 
             # To add Importance Sampling property
             prev_logpro = rollout.logprobs
-            actions, curr_logpro, entropy = self.actor.random_action(rollout.observations, self.env_continuous)
+            #actions, curr_logpro, entropy = self.actor.random_action(rollout.observations, self.env_continuous)
+            actions, curr_logpro, entropy = self.ac(rollout.observations)
             # Since logarithm of the probabilities are used then subtract them instead of dividing them, get the exponent
 
             ratio = torch.exp(curr_logpro - torch.tensor(prev_logpro))
@@ -267,7 +278,8 @@ class PPO():
             return loss.mean(), entropy
 
         if critic:
-            values = self.critic(rollout.observations).squeeze()
+            #values = self.critic(rollout.observations).squeeze()
+            _ , values, _ = self.ac(rollout.observations)
 
             return nn.MSELoss()(values, torch.from_numpy(rollout.rtgs))
 
@@ -284,10 +296,11 @@ class PPO():
     #
     #     self.wandb = True
 
-    def logger_print(self, epoch, start_time ):
+    def logger_print(self, epoch, start_time , done):
         self.logger.log_tabular("Epoch", epoch)
-        self.logger.log_tabular("EpisodeReturn", with_min_and_max=True)
-        self.logger.log_tabular("EpisodeLength", average_only=True)
+        if done:
+            self.logger.log_tabular("EpisodeReturn", with_min_and_max=True)
+            self.logger.log_tabular("EpisodeLength", average_only=True)
         self.logger.log_tabular("Value", with_min_and_max=True)
         self.logger.log_tabular("Actor_Loss", average_only=True)
         self.logger.log_tabular("Critic_Loss", average_only=True)
@@ -311,6 +324,6 @@ if __name__ == '__main__':
     env = gym.make('MountainCar-v0')
     env1 = gym.make('CartPole-v0') # discrete actions space
 
-    model = PPO(env.unwrapped,1000,100, name_of_exp="MountainCarMyPPO")
+    model = PPO(env.unwrapped,1000,100, name_of_exp="MountainCarMyPPO_CoreAC")
     model.learn(1000)
     model.tb_logger.flush()
