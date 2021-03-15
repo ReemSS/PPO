@@ -1,28 +1,29 @@
 from ActorCriticNetworks import SamplingNetworks
 from torch.optim import Adam
 from CollectingSamples import Rollout
-import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 from torch import nn
+import numpy as np
 import gym
 import time
 import torch
-import wandb
-from spinningup.spinup.utils import EpochLogger
-from spinningup.spinup.utils import colorize
+from MyPPO.spinningup.spinup.utils.logx import EpochLogger
+from MyPPO.spinningup.spinup.utils.logx import colorize
+
+
 class PPO():
     """
-        Implementation of the PPO algorithm with clipped surrogate objective.
+        Implementation of the PPO algorithm with clipped surrogate objective
         This implementation can be applied on environments with either discrete or continuous action spaces,
-        like the original paper says.
-        batches with fixed lengths or with different length given a max length
+        as mentioned in the original paper.
     """
 
-    def __init__(self, env, batch_size, max_ep_len):
+    def __init__(self, env, batch_size, max_ep_len, name_of_exp):
         # Extract environment information
         self.env = env
 
         # Adjust the environment and action space to turn them into a valid input for
-        # the actor network and the value network
+        # the actor network and the critic network
         self.observations_dim = self.adjust_according_to_space(env.observation_space)
         self.actions_dim = self.adjust_according_to_space(env.action_space)
 
@@ -39,31 +40,39 @@ class PPO():
         self.actor = SamplingNetworks(self.observations_dim, self.actions_dim)
         self.critic = SamplingNetworks(self.observations_dim, 1)
 
-
         self.init_hyperparameter()
 
-        # in the original implementation of PPO by OpenAI, different lr were used for each network
+        # in the original implementation of PPO by OpenAI, different values of lr were used for each network
         self.actor_optimiser = Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optimiser = Adam(self.critic.parameters(), lr=self.lr)
 
         self.timesteps = 0
         self.env_continuous = (type(env.action_space) == gym.spaces.Box)
 
-        self.wandb = False
-        self.logger = EpochLogger(dict())
+        # self.wandb = False
+        self.logger = EpochLogger(output_dir="\Logger_Experiments", output_fname=env.unwrapped.spec.id)
 
-        # self.logger = {
-        #     'start_time': 0,
-        #     'current_timestep' : 0,
-        #     'iteration_number': 0,
-        #     'avg_loss': []
-        # }
+        # Set up logging for tensorboard
+        self.tb_logger = SummaryWriter(name_of_exp)
 
-    def init_hyperparameter(self, learning_rate=0.005, gamma=0.95, clip_ratio=0.2, entropy=0.01):
+
+    def init_hyperparameter(self, learning_rate=0.005, gamma=0.99, clip_ratio=0.2,
+                            entropy=0.01, gradient_descent_steps = 80):
+        """
+            Initialise the hyperparameters of the algorithm. The used default values are the same values
+            suggested in the original paper.
+        :param learning_rate: For the actor and critic models
+        :param gamma: discounter factor
+        :param clip_ratio: projection the trust region concept onto the algorithm
+        :param entropy: added to the loss function to guarantee a sufficient exploration
+        :param gradient_descent_steps: number of steps the gradient descent needs to take by the networks
+        :return:
+        """
         self.lr = learning_rate
         self.gamma = gamma
         self.clip_ratio = clip_ratio
         self.entropy_beta = entropy
+        self.gradient_descent_steps = gradient_descent_steps
 
     def learn(self, timesteps):
         """
@@ -72,7 +81,7 @@ class PPO():
             It implements it as follows:
                 - First Step: Collecting Trajectories using Rollout to save the info in '~CollectingSamples.Rollout'
 
-        :param timesteps: Number of interactions wit
+        :param timesteps: Number of interactions with the environment
         :return:
         """
         # Interaction Counter
@@ -81,9 +90,8 @@ class PPO():
         self.timesteps = timesteps
 
         obs = self.env.reset()
-        #obs = self.adjust_according_to_space(obs)
         # Save configuration as json file
-        #self.logger.save_config(locals())
+        # self.logger.save_config(locals())
 
         # Tracking episode length and return
         episode_return = 0
@@ -93,52 +101,51 @@ class PPO():
         episode_return_arr = []
 
         start_time = time.time()
+        info = dict()
 
         # Epoch or number of iterations. One epoch indicates that the dataset is passed forward and backward
         # through the network one time. In order to optimise the learning using an iterative process such as the
         # gradient policy, we need more than one epoch to pass through the network.
         # The required number of epochs depends on how diverse the dataset is.
         while k < timesteps:
+            # save the information inside of a rollout
             rollout_t = Rollout(self.batch_size)
 
             batch_rewards = []
             for t in range(self.batch_size):
                 action, logprob,_ = self.actor.random_action(obs, self.env_continuous)
-                critic = self.critic(obs)
-                self.logger.store(Value = critic)
+                value = self.critic(obs)
+                self.logger.store(Value = value.detach().numpy())
 
+                # Save the data of the episode
+                rollout_t.add(action, obs, value, logprob)
                 # Apply the action on the environment
-                next_obs, r_t, done, _ = self.env.step(action)
+                next_obs, r_t, done, info = self.env.step(action)
 
                 # Move the agent after performing an act
                 obs = next_obs
 
-                # Save the data of the episode
-                rollout_t.add(action, obs, critic, logprob)
-
                 episode_length += 1
 
+                # Timeout in the spinup implementation
+                cutOff = (t == (self.batch_size - 1)) or (episode_length == (self.max_epi_len - 1))
 
-                batch_full = (t == (self.batch_size - 1))
-
-                if not(done or batch_full):
+                if not (done or cutOff):
                     episode_return += r_t
                     episode_return_arr.append(r_t)
-
                 # If a terminal state is reached, reset the environment
-                else:
-                    if batch_full and not(done):
-                        print(colorize("The batch is full but a terminal state has not been reached",
-                                       color='yellow',bold=True))
-
+                if done or cutOff:
                     # If a terminal state not reached, but max episode length is reached or the batch size
                     # is exhausted then ask for the reward of the current state, and compute the discounted rewards
-                    if batch_full or (episode_length == self.max_epi_len - 1):
+                    if cutOff and not(done):
+                        print(colorize("The batch is full or the max episode length has "
+                                       "been reached, but a terminal state has not been reached",
+                                       color='yellow',bold=True))
                         # then take a look at the target value
-                        action, _, _ = self.actor.random_action(obs, self.env_continuous)
-                        _, r_t, _,_ = self.env.step(action)
+                        action, _, logprob = self.actor.random_action(obs, self.env_continuous)
+                        _, r_t, _,info = self.env.step(action)
                         episode_return += r_t
-                    else:
+                    elif done:
                         # the terminal state has been reached
                         r_t = 0
                         # Save the episode data
@@ -155,101 +162,155 @@ class PPO():
                     episode_return, episode_length, episode_return, episode_return_arr = 0,0,0,[]
 
             rollout_t.compute_disc_rewards(self.gamma, batch_rewards)
-            rollout_t.convert_array_to_tensors()
+            rollout_t.convert_list_to_numpyarray()
             k += 1
 
             # Set up model saving
             if k == (timesteps - 1):
                 self.logger.save_state({'env': self.env}, None)
-            #self.logger.setup_pytorch_saver(self.actor)
-            self.update(rollout_t)
-            self.logger_print( k, start_time)
+            # self.logger.setup_pytorch_saver(self.actor)
+
+            old_policy_loss, entropy = self.compute_loss(rollout_t, actor= True)[0].detach().numpy(),\
+                                       self.compute_loss(rollout_t, actor= True)[1]
+
+            old_value_loss = self.compute_loss(rollout_t, critic=True).detach().numpy()
+
+            self.logger.store(Actor_Loss = old_policy_loss, Critic_Loss = old_value_loss)
+            for i in range(self.gradient_descent_steps):
+                self.update(rollout_t)
+
+            curr_policy_loss = self.compute_loss(rollout_t, actor=True)[0].detach().numpy()
+            curr_value_loss = self.compute_loss(rollout_t, critic=True).detach().numpy()
+
+            self.logger.store(Delta_Loss_Actor= curr_policy_loss - old_policy_loss,
+                              Delta_Loss_Critic= curr_value_loss - old_value_loss)
+            self.logger_print(k, start_time)
+
+            # Save the model every 20 iteration, to continue with a trained model
+            if (k % 20 == 0) or (k == k-1):
+                torch.save(self.actor.state_dict(), 'MyPPO/PPO/PPO_author.pth')
+                torch.save(self.critic.state_dict(), 'MyPPO/PPO/critic_author.pth')
+
+            for i in info:
+                if 'episode' in i:
+                    score = info['episode']['r']
+                    self.tb_logger.add_scalar("charts/episode_reward", score, k)
+
+            # add the logging info to the tensorboard
+            self.tb_logger.add_scalar("losses/value_loss", np.round(old_value_loss, 4), k)
+            self.tb_logger.add_scalar("losses/policy_loss", np.round(old_policy_loss, 4), k)
+            #self.tb_logger.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
+            # entropy = mpi_statistics_scalar(self.logger.get_stats("Entropy"), average_only = True)
+            self.tb_logger.add_scalar("losses/approx_entropy", entropy, k)
+
 
     def update(self, rollout):
         """
-            Implements the sixth step in the pseudocode
+            Implements the sixth and the sevenths step in the pseudocode of OpenAI.
+            First we try to maximise the clip surrogate function, using Adam
+            Secondly minimise the mean squared error of the value function, using
+
+        :param rollout: the different trajectories collected in a batch
         :return:
         """
+        actor_loss, entropy = self.compute_loss(rollout, actor=True)
 
-        advantages = rollout.rtgs - rollout.critic.detach()
-
-        advantages = (advantages - advantages.mean()) / (advantages.std() - 1e-5) # Normalise
-
-        prev_logpro = rollout.logprobs
-
-        actions, curr_logpro, entropy = self.actor.random_action(rollout.observations, self.env_continuous)
-
-        values = self.critic(rollout.observations).squeeze()
-
-        ratio = torch.exp(curr_logpro - prev_logpro) # Importance Sampling in PPO & calculus trick
-
-        surr1 = advantages * ratio
-        surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages # why is ratio inside
-
-        loss =  torch.min(surr1, surr2)  + F.mse_loss(values, rollout.rtgs) + entropy*self.entropy_beta # as suggested in Paper
-
-        actor_loss = loss.mean()
-
-        old_loss = actor_loss
-        #self.logger["avg_loss"].append(actor_loss.detach())
-
-        self.actor_optimiser.zero_grad() # zero out the gradient before the backpropragation
+        self.actor_optimiser.zero_grad()
         # The error at the output is passed through the network
-        actor_loss.backward(retain_graph = True)
+        actor_loss.backward()
         self.actor_optimiser.step()
-        #(retain_graph = True) # otherwise we get an error
-        # ((rollout.values - rollout.rewards)**2).mean()
 
-        critic_value_loss = nn.MSELoss()(values, rollout.rtgs)
-        old_lossV = critic_value_loss
+        critic_loss = self.compute_loss(rollout, critic= True)
+
         # Find the local minimum loss
         self.critic_optimiser.zero_grad()
-        critic_value_loss.backward()
+        critic_loss.backward()
         self.critic_optimiser.step()
 
-        self.logger.store(LossPi = old_loss, LossV = critic_value_loss, Entropy = entropy,
-                          DeltaLossPi= (actor_loss.item() - old_loss),
-                          DeltaLossV= (critic_value_loss.item() - old_lossV))
 
-    def init_wandb(self):
-        wandb.init(project="ppo", entity="rfarah", sync_tensorboard=True)
+    def compute_loss(self, rollout, actor = False, critic = False):
+        """
 
-        wandb.config.update({
-            "timesteps: ": self.timesteps,
-            "Average_loss": self.logger["avg_loss"],
-            "iteration": self.logger["iteration_number"],
-            "delta_time": time.time() - self.logger["start_time"]
-        })
+        :param rollout:
+        :param actor:
+        :param critic:
+        :return:
+        """
+        if actor:
+            # Compute the advantages after interacting with the environment
+            advantages = rollout.rtgs - rollout.values  # there was a values.detach()
+            # To a faster learning we need to normalise the data
+            # advantages = (advantages - advantages.mean()) / (advantages.std() - 1e-5)
+            advantages = (advantages - advantages.min()) / (advantages.max() - advantages.min())
 
-        self.wandb = True
+            # To add Importance Sampling property
+            prev_logpro = rollout.logprobs
+            actions, curr_logpro, entropy = self.actor.random_action(rollout.observations, self.env_continuous)
+            # Since logarithm of the probabilities are used then subtract them instead of dividing them, get the exponent
+
+            ratio = torch.exp(curr_logpro - torch.tensor(prev_logpro))
+            advantages = torch.from_numpy(advantages)
+            # Unclipped objective
+            surr1 = advantages * ratio
+            # Clipped objective
+            surr2 = torch.clamp(ratio, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages
+
+            # Since Actor and Critic are neural networks that share parameters (i.e. observations caused by action produced
+            # by the actor network, are then passed through the critic network. Then the loss function that combines the
+            # discounted reward, which is obtained by applying a policy, and the value function. Entropy is added
+            # to ensure exploration as suggested in the original paper. It makes the agent more uncertain about the action
+            # to choose
+            loss =  -(torch.min(surr1, surr2) + entropy*self.entropy_beta)
+            # Store the entropy
+            self.logger.store(Entropy = entropy)
+
+            return loss.mean(), entropy
+
+        if critic:
+            values = self.critic(rollout.observations).squeeze()
+
+            return nn.MSELoss()(values, torch.from_numpy(rollout.rtgs))
+
+
+    # def init_wandb(self):
+    #     wandb.init(project="ppo", entity="rfarah", sync_tensorboard=True)
+    #
+    #     wandb.config.update({
+    #         "timesteps: ": self.timesteps,
+    #         "EpisodeReturn": (self.logger.get_stats("EpisodeReturn")),
+    #         "iteration": self.logger["iteration_number"],
+    #         "delta_time": time.time() - self.logger["start_time"]
+    #     })
+    #
+    #     self.wandb = True
 
     def logger_print(self, epoch, start_time ):
-        self.logger.log_tabular("Epoch",epoch)
+        self.logger.log_tabular("Epoch", epoch)
         self.logger.log_tabular("EpisodeReturn", with_min_and_max=True)
         self.logger.log_tabular("EpisodeLength", average_only=True)
         self.logger.log_tabular("Value", with_min_and_max=True)
-        # logger.log_tabular("Actor_Loss")
-        # logger.log_tabular("Critic_Loss")
+        self.logger.log_tabular("Actor_Loss", average_only=True)
+        self.logger.log_tabular("Critic_Loss", average_only=True)
+        self.logger.log_tabular("Entropy", average_only=True)
+        self.logger.log_tabular("Delta_Loss_Actor", average_only=True)
+        self.logger.log_tabular("Delta_Loss_Critic", average_only=True)
         self.logger.log_tabular("Time", time.time() - start_time)
         self.logger.dump_tabular()
 
-
-
     def adjust_according_to_space(self, env_space):
-        dim = 0
 
         if type(env_space) != gym.spaces.Box:
             dim = env_space.n
         else:
             dim = env_space.shape[0]
-
         return dim
 
 
 if __name__ == '__main__':
-    env = gym.make('LunarLanderContinuous-v2')
-    env1 = gym.make('CartPole-v1') # discrete actions space
-    #print(env.action_space.shape)
-    #print(env1.action_space.n)
-    model = PPO(env.unwrapped, 256,50)
-    model.learn(50)
+    # Specify name the experiment as an argument
+    env = gym.make('MountainCar-v0')
+    env1 = gym.make('CartPole-v0') # discrete actions space
+
+    model = PPO(env.unwrapped,1000,100, name_of_exp="MountainCarMyPPO")
+    model.learn(1000)
+    model.tb_logger.flush()

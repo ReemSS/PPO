@@ -1,7 +1,6 @@
-import numpy as np
 import torch
+import numpy as np
 
-import random
 class Rollout():
     """
         Rollout class saves the relevant data, when an agent performs an action in the environment, changes might
@@ -15,11 +14,11 @@ class Rollout():
         self.observations = []
         self.actions = []
         self.logprobs = []
-        self.critic = []
+        self.values = []
         self.rtgs = []
         self.t = 0
 
-    def add(self, action, obs, crtic, logprob):
+    def add(self, action, obs, value, logprob):
         """
             Saves the results of the agent interaction when performing the given action
         :param action:
@@ -34,13 +33,13 @@ class Rollout():
         else:
             self.actions.append(action)
             self.observations.append(obs)
-            self.critic.append(crtic)
+            self.values.append(value)
             self.logprobs.append(logprob)
             self.t += 1
 
     def compute_disc_rewards(self, gamma, batch_rewards):
         """
-            Implements the forth step in the pseudocode, compute the discounted rewards of each episode in a batch.
+            Implements the fourth step in the pseudocode, compute the discounted rewards of each episode in a batch.
 
         :param gamma: the discounter factor
         :param batch_rewards: the epsiodes rewards collected per a batch
@@ -57,11 +56,10 @@ class Rollout():
         self.rtgs = batch_rtgs
 
 
-    def convert_array_to_tensors(self):
-
-        self.observations = torch.tensor(self.observations, dtype=torch.float)
-        self.actions = torch.tensor(self.actions, dtype=torch.float)
-        self.logprobs = torch.tensor(self.logprobs, dtype=torch.float)
-        self.critic = torch.tensor(self.critic, dtype=torch.float)
-        self.rtgs = torch.tensor(self.rtgs, dtype=torch.float)
+    def convert_list_to_numpyarray(self):
+        self.observations = np.asarray(self.observations, dtype=np.float32)
+        self.actions = np.asarray(self.actions, dtype=np.float32)
+        self.logprobs = np.asarray(self.logprobs, dtype=np.float32)
+        self.values = np.asarray(self.values, dtype=np.float32)
+        self.rtgs = np.asarray(self.rtgs, dtype=np.float32)
 
