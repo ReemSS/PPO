@@ -75,25 +75,22 @@ class Rollout:
         :param batch_rewards: the epsiodes rewards collected per a batch
         :return:
         """
-        print("start index ", self.trajectory_start_idx)
-        print("end index ", self.t)
         path_slice = slice(self.trajectory_start_idx, self.t)
         r = np.append(self.rew[path_slice], r_t)
         v = np.append(self.values[path_slice], r_t)
 
-        self.tmp = self.trajectory_start_idx
+        #self.tmp = self.trajectory_start_idx
         self.trajectory_start_idx = self.t
 
-        r = r[::-1]
         a = [1, float(-gamma)]
         b = [1]
-        tmp = signal.lfilter(b, a, x=r, axis=0)[::-1]
-        self.discounted_rew[path_slice] = torch.tensor(tmp.copy(), dtype= torch.float32)[:-1]
+        tmp = signal.lfilter(b, a, x=r[::-1], axis=0)[::-1]
+        self.discounted_rew[path_slice] = tmp[:-1] # except the last element
         #self.compute_adv_mc(path_slice)
         # r[:-1] all but the last element, v[1:] all elements but the first element
         deltas = r[:-1] + gamma * v[1:] - v[:-1]
-        tmp = signal.lfilter(b, [1,float(-gamma*0.97)], x=deltas[::-1], axis=0)[::-1]
-        self.adv[path_slice] = torch.tensor(tmp.copy(), dtype= torch.float32)
+        #tmp = signal.lfilter(b, [1,float(-gamma*0.97)], x=deltas[::-1], axis=0)[::-1]
+        self.adv[path_slice] = signal.lfilter(b, [1,float(-gamma*0.97)], x=deltas[::-1], axis=0)[::-1]
 
     def compute_gae(self, gamma, lam, last_value):
         """

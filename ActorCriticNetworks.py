@@ -1,92 +1,87 @@
 import torch
 from torch import nn
 import numpy as np
-from torch.distributions import MultivariateNormal, Categorical, normal
-from torch.functional import F
+from torch.distributions import MultivariateNormal, Categorical
+from torch.distributions.normal import Normal
 
-class SamplingNetworks(nn.Module):
-    """
-        Sampling Networks with 3 linear layers using Relu as activation function also credits to
-        https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
-    """
-    def __init__(self, in_dim, out_dim):
-        """
-            Initialise the networks with input and output dimensions equal to the environment's dimensions
-            :param in_dim:
-            :param out_dim:
-        """
-        super(SamplingNetworks, self).__init__()
-        # implemented an easy network in order to understand the work of the actor and critic networks
-        self.modelCritic = nn.Sequential(nn.Linear(in_dim, 64),
-                                         nn.Tanh(),
-                                         nn.Linear(64,64),
-                                         nn.Tanh(),
-                                         nn.Linear(64, 1),
-                                         nn.Identity())
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
 
-        self.modelActor = nn.Sequential(nn.Linear(in_dim, 64),
-                                   nn.Tanh(),
-                                   nn.Linear(64, 64),
-                                   nn.Tanh(),
-                                   nn.Linear(64, out_dim),
-                                   nn.Identity())
+class Actor(nn.Module):
+    def __init__(self, obs_dim, act_dim, contintuous):
+        super().__init__()
+        self.continuous = contintuous
+        if contintuous:
+            log_std = 0.5 * np.ones(act_dim, dtype=np.float32)
+            self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
 
-        # # to give all the actions initially the same probability, needed for continuous action spaces
-        self.scalar = torch.full(size=(out_dim,), fill_value=0.5)
-        self.scalar_matrix = torch.diag(self.scalar)
+        self.network = nn.Sequential(layer_init(nn.Linear(obs_dim, 64)),
+                                    nn.ReLU(),
+                                     nn.Linear(64, 64),
+                                    nn.Tanh(),
+                                     nn.Linear(64, act_dim),
+                                    nn.Identity())
 
 
-    def forward(self, obs, critic = False):
-        """
-            Feeds the observation to the network
-            :param obs: the observation of the environment
-            :return: the output of the network, which is the estimated value of the given observations in case the
-            critic network is, or
-        """
+    def _distribution(self, obs):
+        mean = self.network(obs)
+        if self.continuous:
+            std = torch.exp(self.log_std)
+            return Normal(mean, std)
+        return Categorical(logits=mean)
+
+    def _logprobability(self, pi, act):
+        if self.continuous:
+            return pi.log_prob(act).sum(axis=-1)
+        return pi.log_prob(act)
+
+
+    def forward(self, obs, act=None):
+        # Produce action distributions for given observations, and
+        # optionally compute the log likelihood of given actions under
         if isinstance(obs, np.ndarray):
-            obs = torch.tensor(obs, dtype=torch.float32)
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+        # those distributions.
+        pi = self._distribution(obs)
+        logp = None
+        if act is not None:
+            act = torch.as_tensor(act, dtype=torch.float32)
+            logp = self._logprobability(pi, act)
+        return pi, logp, pi.entropy()
 
-        # act1 = F.relu(self.layer1(obs))
-        # act2 = F.relu(self.layer2(act1))
-        # # to sum the output probabilities to 1. Softmax is used here since it helps propagating multiclass information
-        # out = F.softmax(self.layer3(act2))
-        if critic:
-            return torch.squeeze(self.modelCritic(obs), -1)
-        return self.modelActor(obs)
 
-    def random_action(self, obs ,env_continuous, action=None):
-        # In Actor network we need the probability of the actions to count the ratio of
+class Critic(nn.Module):
+    def __init__(self, obs_dim):
+        super().__init__()
+        self.network =  nn.Sequential(layer_init(nn.Linear(obs_dim, 64)),
+                                            nn.ReLU(),
+                                     nn.Linear(64,64),
+                                            nn.Tanh(),
+                                     nn.Linear(64, 1),
+                                        nn.Identity())
 
-        # initially give all actions the same probability to allow the actor to explore, credits to
-        # https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-3-4-82081ea58146
-        mean = self.forward(obs)
-        if env_continuous:
-            # if the action space is continuous i.e. type of Box. The actions have a range of infinite values.
-            # Therefore the probability distribution of the possible actions is continuous.
-            # The common continuous distributions are the following:
-            # Normal, Binomial, hypergeometric, Poisson, Beta, Cauchy, Exponential, Gamma, Logistic and Weibull.
-            # The observation space hasty the normal distribution describes uncertain variables.
-            # The mean here represents  more than one dimension, then the distribution is a multivariate distribution,
-            # In this case of uncertainthe most likely value of the uncertain actions (the first condition of the
-            # underlying normal distribution.
+    def forward(self, obs):
+        if isinstance(obs, np.ndarray):
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+        return torch.squeeze(self.network(obs), -1) # Critical to ensure v has right shape.
 
-            # dist = normal.Normal(mean, self.scalar_matrix)
-            dist = MultivariateNormal(mean, self.scalar_matrix)
+class ActorCritic(nn.Module):
+    def __init__(self, obs_dim, action_space, continuous):
+        super().__init__()
 
-            if action is not None:
-                action = torch.as_tensor(action, dtype=torch.float32)
-            else:
-                action = dist.sample()
-            log_pro = dist.log_prob(action).sum(axis=-1)
-        else:
-            # The multinomial or the categorical distribution describes the random obs with many possible actions.
-            # summing up the output of the network to one.
-            dist = Categorical(logits=mean)
+        self.actor = Actor(obs_dim, action_space, continuous)
 
-            if action is not None:
-                action = torch.as_tensor(action, dtype=torch.float32)
-            else:
-                action = dist.sample()
-            log_pro = dist.log_prob(action)
+        # build value function
+        self.critic = Critic(obs_dim)
 
-        return action.detach().numpy(), log_pro, dist.entropy()
+    def step(self, obs):
+        if isinstance(obs, np.ndarray):
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+        with torch.no_grad():
+            pi = self.actor._distribution(obs)
+            a = pi.sample()
+            logp_a =pi.log_prob(a)
+            v = self.critic(obs)
+        return a.numpy(), v.numpy(), logp_a.numpy()
