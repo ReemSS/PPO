@@ -47,7 +47,7 @@ class Actor(nn.Module):
         """
             Forward pss on the network
         :param obs: observations of the environment as input to the network.
-        :param action: if an action is already sampled or not. Needed since forward is used when interacting with
+        :param action: if an action is already sampled or not. It is needed since forward is used when interacting with
                        environment and when the policy parameters are updated.
         :param sample: if an action should be sampled or not.
         :return:
