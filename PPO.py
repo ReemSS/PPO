@@ -9,8 +9,8 @@ import time
 import torch
 import wandb
 import random
-from MyPPO.spinningup.spinup.utils.logx import EpochLogger
-from MyPPO.spinningup.spinup.utils.logx import colorize
+from MyPPO.tools.logx import EpochLogger
+from MyPPO.tools.logx import colorize
 
 class PPO():
     """
@@ -34,20 +34,21 @@ class PPO():
             self.actor = CategoricalActor(self.observations_dim, self.actions_dim)
 
         self.critic = Critic(self.observations_dim)
-        
-        self.ac = ActorCritic(self.observations_dim, self.actions_dim, self.neuron_num, self.env_continuous)
 
         self.init_hyperparameter()
+
+        self.ac = ActorCritic(self.observations_dim, self.actions_dim, self.neuron_num, self.env_continuous)
+
         # Uncomment this to conduct are experiments using W&B.
         # self.init_wandb(project=name_of_exp)
 
         # Gradient-based optimisation method Adam used to optimise the search for the minimum or the maximum
         self.actor_optimiser = Adam(self.ac.actor.parameters(), lr=self.learning_rate)
         self.critic_optimiser = Adam(self.ac.critic.parameters(), lr=self.learning_rateV)
-        
-        # Wrap the environment to create a timeout 
+
+        # Wrap the environment to create a timeout
         self.env = gym.make(env.spec.id)
-        
+
         self.logger = EpochLogger(name_of_exp)
 
         # Set up logging for tensorboard
@@ -118,11 +119,8 @@ class PPO():
         # Counter
         k = 0
         obs = self.env.reset()
-       
-        # Save configuration as json file
-        self.logger.save_config(locals())
-        
-        # Tracking episode length 
+
+        # Tracking episode length
         episode_length = 0
 
         start_time = time.time()
@@ -130,7 +128,7 @@ class PPO():
         # wandb.watch(self.ac)
 
         self.logger.setup_pytorch_saver(self.ac)
-        
+
         number_of_interactions = 0
         rewards_per_episode = 0
         episode = 0
@@ -139,7 +137,7 @@ class PPO():
 
         while k < timesteps - 1:
             number_of_interactions += k
-            
+
             # save the information inside of a rollout
             batch_size = self.batch_size
             rollout_t = Rollout(batch_size, self.env)
@@ -155,19 +153,19 @@ class PPO():
             for t in range(batch_size):
                 # AC interacts with the environment based on the observations.
                 action, value, logprob = self.ac.step(obs)
-                
+
                 self.logger.store(Value=value.item())
-                
+
                 # Apply the selected action on the environment
                 next_obs, rew_t, done, _ = self.env.step(action)
-             
+
                 # done = (obs[0] >= 0.5) # for mountain Car only
                 if self.render or done:
                     self.env.render()
 
                 rewards_per_episode += rew_t
                 episode_length += 1
-                
+
                 # Save the data of the episode
                 rollout_t.add(action, obs, value, rew_t, logprob)
                 # Move the agent after performing an action
@@ -177,8 +175,8 @@ class PPO():
 
                 # If a terminal state is reached, reset the  environment
                 # if done or cutOff:
-                if done: # in lunar lander there is a terminal state, no need to cutt off the episode (No redundancy here in the if-statements, but different 
-                         # conditons are used for different environments. 
+                if done: # in lunar lander there is a terminal state, no need to cutt off the episode (No redundancy here in the if-statements, but different
+                    # conditons are used for different environments.
                     if done: # for Pendulum, since the environment wrapper ends the episode, when its length is equal to 200
                         # The terminal state has been reached
                         self.logger.store(EpisodeReturn = rewards_per_episode, EpisodeLength = episode_length)
@@ -190,8 +188,8 @@ class PPO():
                         # Then take a look at the target value (bootstrapping)
                         _, rew_t,_ = self.ac.step(obs)
 
-                    wandb.log({"episode reward": rewards_per_episode})
-                    
+                    # wandb.log({"episode reward": rewards_per_episode})
+
                     rewards_per_episode, episode_length = 0,0
 
                     # rollout_t.compute_adv_nsteps(self.gamma, rew_t)
@@ -202,7 +200,7 @@ class PPO():
                 self.logger.save_state({'env': self.env}, None)
 
             old_policy_loss, curr_policy_loss, old_value_loss, curr_value_loss, kl, entropy = self.update(rollout_t)
-            
+
             self.logger.store(Actor_Loss = old_policy_loss,
                               Critic_Loss = old_value_loss)
 
@@ -228,10 +226,10 @@ class PPO():
             self.tb_logger.add_scalar("losses/approx_entropy", entropy, number_of_interactions)
             self.tb_logger.flush()
 
-            wandb.log({"losses/value_loss": old_value_loss, "steps": number_of_interactions})
-            wandb.log({"losses/policy_loss": old_policy_loss, "steps": number_of_interactions})
-            wandb.log({"losses/approx.kl": self.approx_kl, "steps": number_of_interactions})
-            wandb.log({"losses/approx_entropy": entropy, "steps": number_of_interactions})
+            # wandb.log({"losses/value_loss": old_value_loss, "steps": number_of_interactions})
+            # wandb.log({"losses/policy_loss": old_policy_loss, "steps": number_of_interactions})
+            # wandb.log({"losses/approx.kl": self.approx_kl, "steps": number_of_interactions})
+            # wandb.log({"losses/approx_entropy": entropy, "steps": number_of_interactions})
         self.tb_logger.close()
         self.env.close()
 
@@ -245,20 +243,20 @@ class PPO():
         old_policy_loss, entropy, _ = self.compute_loss(rollout)
         critic_loss,_ = self.compute_loss(rollout, actor=False)
         old_value_loss = critic_loss.item()
-       
+
         for i in range(self.gradient_descent_steps):
             # Zero out the gradient buffer, because the gradients of the last iteration are saved in x.grad due to calling backward
             self.actor_optimiser.zero_grad()
             # Compute the loss function
             actor_loss, entropy, kl = self.compute_loss(rollout)
-            
+
             # Update actor policy only if the change is not large
             if abs(kl) > 0.03:#0.015
                 print(colorize("Actor could not been updated due to large kl divergence", bold=True, color="blue"))
                 break
-                
+
             self.approx_kl = kl
-            
+
             # The error at the output is passed through the network, it computes the gradients of every parameter
             actor_loss.backward()
             # The optimiser updates itself according to the computed gradients
@@ -270,7 +268,7 @@ class PPO():
             # if abs(diff) > 1.5:
             #     break
             critic_loss.backward()
-            
+
             self.critic_optimiser.step()
 
         curr_value_loss = critic_loss.item()
@@ -287,9 +285,9 @@ class PPO():
         if actor:
             # To add Importance Sampling property
             prev_logpro = torch.as_tensor(rollout.logprobs, dtype=torch.float32)
-            
+
             actions, curr_logpro, entropy = self.ac.actor(rollout.observations, rollout.actions, sample=True)
-            
+
             # Since logarithm of the probabilities are used then subtract them instead of dividing them, get the exponent
             curr_logpro = torch.as_tensor(curr_logpro, dtype=torch.float32)
             ratio = torch.exp(curr_logpro - prev_logpro)
@@ -298,12 +296,12 @@ class PPO():
             kl = (prev_logpro - curr_logpro).mean().item()
 
             advantages = rollout.adv
-            
+
             # Normalising the advantages for a faster learning. Important to add a small number, otherwise after a num
             # of iterations the gradient will explode and the actor loss turned to NaN
             advantages = (advantages - advantages.mean()) / (advantages.std()+ 1e-8)
             advantages = torch.as_tensor(advantages, dtype=torch.float32)
-            
+
             # Unclipped objective
             surr1 = advantages * ratio
             # Clipped objective
@@ -313,9 +311,9 @@ class PPO():
             entropy_loss = entropy.mean()
             loss =  -torch.min(surr1, surr2).mean() - (entropy_loss*self.entropy_beta)
             # loss = -(torch.min(surr1, surr2)).mean()
-       
+
             return loss , entropy_loss.item(), kl
-    
+
         else:
             rtgs = torch.as_tensor(rollout.discounted_rew, dtype=torch.float32)
             obs = torch.as_tensor(rollout.observations, dtype=torch.float32)
@@ -329,12 +327,12 @@ class PPO():
             clipped_value = old_values + torch.clamp(diff, -self.clip_ratio, self.clip_ratio)
             loss_unclipped = (new_values - rtgs)**2
             loss_clipped = (clipped_value - rtgs)**2
-            
+
             # Maximise the loss so the critic learns faster how to give a valid feedback, since value is needed
             # in computing the advantages and the discounted rewards.
             loss = 0.5*torch.max(loss_unclipped, loss_clipped).mean()
             # loss = ((new_values - rtgs)**2).mean()
-            
+
             return loss, diff.mean()
 
     def logger_print(self, epoch, start_time):
