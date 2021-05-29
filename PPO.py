@@ -1,4 +1,3 @@
-from ActorCriticNetworksA import Critic, CategoricalActor, GaussianActor
 from ActorCriticNetworks import ActorCritic
 from torch.optim import Adam
 from Rollout import Rollout
@@ -28,12 +27,6 @@ class PPO():
 
         # Create the networks of A2C agent to interact with the environment
         self.env_continuous = (type(env.action_space) == gym.spaces.Box)
-        if self.env_continuous:
-            self.actor = GaussianActor(self.observations_dim, self.actions_dim)
-        else:
-            self.actor = CategoricalActor(self.observations_dim, self.actions_dim)
-
-        self.critic = Critic(self.observations_dim)
 
         self.init_hyperparameter()
 
