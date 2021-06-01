@@ -33,7 +33,7 @@ class PPO():
         self.ac = ActorCritic(self.observations_dim, self.actions_dim, self.neuron_num, self.env_continuous)
 
         # Uncomment this to conduct are experiments using W&B.
-        # self.init_wandb(project=name_of_exp)
+        # self.init_wandb(name=name_of_exp)
 
         # Gradient-based optimisation method Adam used to optimise the search for the minimum or the maximum
         self.actor_optimiser = Adam(self.ac.actor.parameters(), lr=self.learning_rate)
